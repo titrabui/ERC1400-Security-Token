@@ -1,0 +1,24 @@
+{
+  "semi": true,
+  "tabWidth": 2,
+  "printWidth": 120,
+  "overrides": [
+    {
+      "files": "*.sol",
+      "options": {
+        "tabWidth": 4,
+        "printWidth": 200
+      }
+    },
+    {
+      "files": "*.js",
+      "options": {
+        "printWidth": 200
+      }
+    },
+    {
+      "files": ["*.html", "legacy/**/*.js"],
+      "options": {}
+    }
+  ]
+}
