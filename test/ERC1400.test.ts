@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { BaseContract, Signer } from "ethers";
+import { BaseContract, ContractTransactionResponse, Log, Signer } from "ethers";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { ERC1400 } from "../typechain-types";
 
@@ -38,10 +38,84 @@ const documentHash = "0x1c81c608a616183cc4a38c09ecc944eb77eaff465dd87aae0290177f
 
 const issuanceAmount = 1000n;
 
-// async function assertBalance(_contract: ERC1400, _tokenHolder: Signer, _amount: bigint) {
-//   const balance = await _contract.balanceOf(_tokenHolder);
-//   expect(balance).to.equal(_amount);
-// }
+function assertTransferEvent(
+  _contract: ERC1400,
+  _logs: Log[],
+  _fromPartition: string,
+  _operator: Signer,
+  _from: Signer,
+  _to: Signer,
+  _amount: bigint,
+  _data: string | null,
+  _operatorData = "0x"
+) {
+  let i = 0;
+  let event;
+  if (_logs.length === 3) {
+    event = _contract.interface.decodeEventLog("Checked", _logs[0].data, _logs[0].topics);
+    expect(event.sender).to.equal(_operator);
+    i = 1;
+  }
+
+  event = _contract.interface.decodeEventLog("Transfer", _logs[i].data, _logs[i].topics);
+  expect(event.from).to.equal(_from);
+  expect(event.to).to.equal(_to);
+  expect(event.value).to.equal(_amount);
+
+  event = _contract.interface.decodeEventLog("TransferByPartition", _logs[i + 1].data, _logs[i + 1].topics);
+  expect(event.fromPartition).to.equal(_fromPartition);
+  expect(event.operator).to.equal(_operator);
+  expect(event.from).to.equal(_from);
+  expect(event.to).to.equal(_to);
+  expect(event.value).to.equal(_amount);
+  expect(event.data).to.equal(_data);
+  expect(event.operatorData).to.equal(_operatorData);
+}
+
+async function assertBalances(_contract: ERC1400, _tokenHolder: Signer, _partitions: string[], _amounts: bigint[]) {
+  let totalBalance = 0n;
+  for (let i = 0; i < _partitions.length; i++) {
+    totalBalance += _amounts[i];
+    await assertBalanceOfByPartition(_contract, _tokenHolder, _partitions[i], _amounts[i]);
+  }
+  await assertBalance(_contract, _tokenHolder, totalBalance);
+}
+
+async function assertBalanceOf(_contract: ERC1400, _tokenHolder: Signer, _partition: string, _amount: bigint) {
+  await assertBalance(_contract, _tokenHolder, _amount);
+  await assertBalanceOfByPartition(_contract, _tokenHolder, _partition, _amount);
+}
+
+async function assertBalanceOfByPartition(
+  _contract: ERC1400,
+  _tokenHolder: Signer,
+  _partition: string,
+  _amount: bigint
+) {
+  const balanceByPartition = await _contract.balanceOfByPartition(_partition, _tokenHolder);
+  expect(balanceByPartition).to.equal(_amount);
+}
+
+async function assertBalance(_contract: ERC1400, _tokenHolder: Signer, _amount: bigint) {
+  const balance = await _contract.balanceOf(_tokenHolder);
+  expect(balance).to.equal(_amount);
+}
+
+async function assertTotalSupply(_contract: ERC1400, _amount: bigint) {
+  const totalSupply = await _contract.totalSupply();
+  expect(totalSupply).to.equal(_amount);
+}
+
+async function authorizeOperatorForPartitions(
+  _contract: ERC1400,
+  _operator: Signer,
+  _tokenHolder: Signer,
+  _partitions: string[]
+) {
+  for (const partition of _partitions) {
+    await _contract.connect(_tokenHolder).authorizeOperatorByPartition(partition, _operator);
+  }
+}
 
 async function issueOnMultiplePartitions(
   _contract: ERC1400,
@@ -241,10 +315,10 @@ describe("ERC1400", function () {
 
             const amount = issuanceAmount;
             const tx = await token.connect(tokenHolder).transfer(recipient, amount);
-            expect(tx).to.emit(token, "Transfer").withArgs(tokenHolder, recipient, amount);
-            expect(tx)
+            await expect(tx).to.emit(token, "Transfer").withArgs(tokenHolder, recipient, amount);
+            await expect(tx)
               .to.emit(token, "TransferByPartition")
-              .withArgs(partition1, tokenHolder, tokenHolder, recipient, amount, null, null);
+              .withArgs(partition1, tokenHolder, tokenHolder, recipient, amount, "0x", "0x");
           });
         });
 
@@ -311,10 +385,10 @@ describe("ERC1400", function () {
 
                 const tx = await token.connect(operator).transferFrom(tokenHolder, recipient, amount);
 
-                expect(tx).to.emit(token, "Transfer").withArgs(tokenHolder, recipient, amount);
-                expect(tx)
+                await expect(tx).to.emit(token, "Transfer").withArgs(tokenHolder, recipient, amount);
+                await expect(tx)
                   .to.emit(token, "TransferByPartition")
-                  .withArgs(partition1, operator, tokenHolder, recipient, amount, null, null);
+                  .withArgs(partition1, operator, tokenHolder, recipient, amount, "0x", "0x");
               });
             });
 
@@ -461,7 +535,7 @@ describe("ERC1400", function () {
 
   // PARTITIONSOF
 
-  describe.only("partitionsOf", function () {
+  describe("partitionsOf", function () {
     describe("when tokenHolder owes no tokens", function () {
       it("returns empty list", async function () {
         const { token, tokenHolder } = await loadFixture(deployFixture);
@@ -479,6 +553,7 @@ describe("ERC1400", function () {
         expect(partitionsOf[0]).to.equal(partition1);
       });
     });
+
     describe("when tokenHolder owes tokens of 3 partitions", function () {
       it("returns list of 3 partitions", async function () {
         const { token, owner, tokenHolder } = await loadFixture(deployFixture);
@@ -493,6 +568,391 @@ describe("ERC1400", function () {
         expect(partitionsOf[0]).to.equal(partition1);
         expect(partitionsOf[1]).to.equal(partition2);
         expect(partitionsOf[2]).to.equal(partition3);
+      });
+    });
+  });
+
+  // TRANSFERWITHDATA
+
+  describe("transferWithData", function () {
+    describe("when defaultPartitions have been defined", function () {
+      describe("when the amount is a multiple of the granularity", function () {
+        describe("when the recipient is not the zero address", function () {
+          describe("when the sender has enough balance for those default partitions", function () {
+            describe("when the sender has defined custom default partitions", function () {
+              it("transfers the requested amount", async function () {
+                const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+                await token
+                  .connect(tokenHolder)
+                  .transferWithData(recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32); // 2.5 * issuanceAmount
+
+                await assertBalances(token, tokenHolder, partitions, [0n, (issuanceAmount * 5n) / 10n, 0n]);
+                await assertBalances(token, recipient, partitions, [
+                  issuanceAmount,
+                  (issuanceAmount * 5n) / 10n, // 0.5 * issuanceAmount
+                  issuanceAmount,
+                ]);
+              });
+
+              it("emits a sent event", async function () {
+                const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+                const tx = await token
+                  .connect(tokenHolder)
+                  .transferWithData(recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32); // 2.5 * issuanceAmount
+
+                const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+                const logs = receipt?.logs;
+                expect(logs?.length).to.equal(2 * partitions.length);
+
+                if (logs?.length === 2 * partitions.length) {
+                  assertTransferEvent(
+                    token,
+                    [logs[0], logs[1]],
+                    partition3,
+                    tokenHolder,
+                    tokenHolder,
+                    recipient,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertTransferEvent(
+                    token,
+                    [logs[2], logs[3]],
+                    partition1,
+                    tokenHolder,
+                    tokenHolder,
+                    recipient,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertTransferEvent(
+                    token,
+                    [logs[4], logs[5]],
+                    partition2,
+                    tokenHolder,
+                    tokenHolder,
+                    recipient,
+                    (issuanceAmount * 5n) / 10n,
+                    ZERO_BYTES32
+                  );
+                }
+              });
+            });
+
+            describe("when the sender has not defined custom default partitions", function () {
+              it("transfers the requested amount", async function () {
+                const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+
+                await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+                await token
+                  .connect(tokenHolder)
+                  .transferWithData(recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32); // 2.5 * issuanceAmount
+
+                await assertBalances(token, tokenHolder, partitions, [0n, 0n, (issuanceAmount * 5n) / 10n]);
+                await assertBalances(token, recipient, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  (issuanceAmount * 5n) / 10n, // 0.5 * issuanceAmount
+                ]);
+              });
+            });
+          });
+
+          describe("when the sender does not have enough balance for those default partitions", function () {
+            it("reverts", async function () {
+              const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+              await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                issuanceAmount,
+                issuanceAmount,
+                issuanceAmount,
+              ]);
+              await token.connect(owner).setDefaultPartitions(reversedPartitions);
+              await expect(
+                token
+                  .connect(tokenHolder)
+                  .transferWithData(recipient, issuanceAmount * BigInt(partitions.length) + 1n, ZERO_BYTES32)
+              ).to.be.revertedWith("52");
+            });
+          });
+        });
+
+        describe("when the recipient is the zero address", function () {
+          it("reverts", async function () {
+            const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+            await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+              issuanceAmount,
+              issuanceAmount,
+              issuanceAmount,
+            ]);
+            await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+            await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+            await expect(
+              token
+                .connect(tokenHolder)
+                .transferWithData(ethers.ZeroAddress, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
+            ).to.be.revertedWith("57");
+          });
+        });
+      });
+
+      describe("when the amount is not a multiple of the granularity", function () {
+        it("reverts", async function () {
+          const { owner, tokenHolder, recipient, controller } = await loadFixture(deployFixture);
+          const token = await ethers.deployContract(
+            "ERC1400",
+            ["ERC1400Token", "DAU", 2, [controller], partitions],
+            owner
+          );
+          await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+            issuanceAmount,
+            issuanceAmount,
+            issuanceAmount,
+          ]);
+          await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+          await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+          await expect(token.connect(tokenHolder).transferWithData(recipient, 3, ZERO_BYTES32)).to.be.revertedWith(
+            "50"
+          );
+        });
+      });
+    });
+
+    describe("when defaultPartitions have not been defined", function () {
+      it("reverts", async function () {
+        const { owner, tokenHolder, recipient, controller } = await loadFixture(deployFixture);
+        const token = await ethers.deployContract("ERC1400", ["ERC1400Token", "DAU", 1, [controller], []], owner);
+        await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+          issuanceAmount,
+          issuanceAmount,
+          issuanceAmount,
+        ]);
+        await expect(
+          token.connect(tokenHolder).transferWithData(recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
+        ).to.be.revertedWith("55");
+      });
+    });
+  });
+
+  // TRANSFERFROMWITHDATA
+
+  describe("transferFromWithData", function () {
+    describe("when the operator is approved", function () {
+      describe("when the amount is a multiple of the granularity", function () {
+        describe("when the recipient is not the zero address", function () {
+          describe("when defaultPartitions have been defined", function () {
+            describe("when the sender has enough balance for those default partitions", function () {
+              it("transfers the requested amount", async function () {
+                const { token, owner, operator, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+                await token
+                  .connect(operator)
+                  .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32); // 2.5 * issuanceAmount
+
+                await assertBalances(token, tokenHolder, partitions, [0n, (issuanceAmount * 5n) / 10n, 0n]);
+                await assertBalances(token, recipient, partitions, [
+                  issuanceAmount,
+                  (issuanceAmount * 5n) / 10n, // 0.5 * issuanceAmount
+                  issuanceAmount,
+                ]);
+              });
+
+              it("emits a sent event", async function () {
+                const { token, owner, operator, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                const tx = await token
+                  .connect(operator)
+                  .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32); // 2.5 * issuanceAmount
+
+                const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+                const logs = receipt?.logs;
+                expect(logs?.length).to.equal(2 * partitions.length);
+
+                if (logs?.length === 2 * partitions.length) {
+                  assertTransferEvent(
+                    token,
+                    [logs[0], logs[1]],
+                    partition3,
+                    operator,
+                    tokenHolder,
+                    recipient,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertTransferEvent(
+                    token,
+                    [logs[2], logs[3]],
+                    partition1,
+                    operator,
+                    tokenHolder,
+                    recipient,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertTransferEvent(
+                    token,
+                    [logs[4], logs[5]],
+                    partition2,
+                    operator,
+                    tokenHolder,
+                    recipient,
+                    (issuanceAmount * 5n) / 10n,
+                    ZERO_BYTES32
+                  );
+                }
+              });
+            });
+
+            describe("when the sender does not have enough balance for those default partitions", function () {
+              it("reverts", async function () {
+                const { token, owner, operator, tokenHolder, recipient } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await expect(
+                  token
+                    .connect(operator)
+                    .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 35n) / 10n, ZERO_BYTES32)
+                ).to.be.revertedWith("52");
+              });
+
+              it("reverts (mock contract - for 100% test coverage)", async function () {
+                const { owner, controller, tokenHolder, recipient } = await loadFixture(deployFixture);
+                const token = await ethers.deployContract(
+                  "FakeERC1400Mock",
+                  ["ERC1400Token", "DAU", 1, [controller], partitions, ethers.ZeroAddress, ethers.ZeroAddress],
+                  owner
+                );
+                await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+                await expect(
+                  token
+                    .connect(controller)
+                    .transferFromWithData(tokenHolder, recipient, issuanceAmount + 1n, ZERO_BYTES32)
+                ).to.be.revertedWith("52");
+              });
+            });
+          });
+
+          describe("when defaultPartitions have not been defined", function () {
+            it("reverts", async function () {
+              const { token, owner, operator, tokenHolder, recipient } = await loadFixture(deployFixture);
+              await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                issuanceAmount,
+                issuanceAmount,
+                issuanceAmount,
+              ]);
+              await token.connect(tokenHolder).authorizeOperator(operator);
+              await token.connect(owner).setDefaultPartitions([]);
+
+              await expect(
+                token
+                  .connect(operator)
+                  .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
+              ).to.be.revertedWith("55");
+            });
+          });
+        });
+
+        describe("when the recipient is the zero address", function () {
+          it("reverts", async function () {
+            const { token, owner, operator, tokenHolder } = await loadFixture(deployFixture);
+            await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+              issuanceAmount,
+              issuanceAmount,
+              issuanceAmount,
+            ]);
+            await token.connect(tokenHolder).authorizeOperator(operator);
+            await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+            await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+            await expect(
+              token
+                .connect(operator)
+                .transferFromWithData(tokenHolder, ethers.ZeroAddress, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
+            ).to.be.revertedWith("57");
+          });
+        });
+      });
+
+      describe("when the amount is not a multiple of the granularity", function () {
+        it("reverts", async function () {
+          const { owner, operator, tokenHolder, recipient, controller } = await loadFixture(deployFixture);
+
+          const token = await ethers.deployContract("ERC1400", ["ERC1400Token", "DAU", 2, [controller], partitions]);
+          await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+            issuanceAmount,
+            issuanceAmount,
+            issuanceAmount,
+          ]);
+          await token.connect(tokenHolder).authorizeOperator(operator);
+          await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+          await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+          await expect(
+            token.connect(operator).transferFromWithData(tokenHolder, recipient, 3, ZERO_BYTES32)
+          ).to.be.revertedWith("50");
+        });
+      });
+    });
+
+    describe("when the operator is not approved", function () {
+      it("reverts", async function () {
+        const { token, owner, operator, tokenHolder, recipient } = await loadFixture(deployFixture);
+        await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+          issuanceAmount,
+          issuanceAmount,
+          issuanceAmount,
+        ]);
+        await token.connect(owner).setDefaultPartitions(reversedPartitions);
+        await expect(
+          token
+            .connect(operator)
+            .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
+        ).to.be.revertedWith("53");
       });
     });
   });
