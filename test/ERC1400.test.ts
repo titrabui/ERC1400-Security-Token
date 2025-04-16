@@ -1389,4 +1389,72 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // ISOPERATOR
+
+  describe("isOperator", function () {
+    it("when operator is tokenHolder", async function () {
+      const { token, tokenHolder } = await loadFixture(deployFixture);
+      expect(await token.isOperator(tokenHolder, tokenHolder)).to.be.true;
+    });
+
+    it("when operator is authorized by tokenHolder", async function () {
+      const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+      await token.connect(tokenHolder).authorizeOperator(operator);
+      expect(await token.isOperator(operator, tokenHolder)).to.be.true;
+    });
+
+    it("when is a revoked operator", async function () {
+      const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+      await token.connect(tokenHolder).authorizeOperator(operator);
+      await token.connect(tokenHolder).revokeOperator(operator);
+      expect(await token.isOperator(operator, tokenHolder)).to.be.false;
+    });
+
+    it("when is a controller and token is controllable", async function () {
+      const { token, tokenHolder, controller } = await loadFixture(deployFixture);
+      expect(await token.isOperator(controller, tokenHolder)).to.be.true;
+    });
+
+    it("when is a controller and token is not controllable", async function () {
+      const { token, owner, tokenHolder, controller } = await loadFixture(deployFixture);
+      await token.connect(owner).renounceControl();
+      expect(await token.isOperator(controller, tokenHolder)).to.be.false;
+    });
+  });
+
+  // ISOPERATORFORPARTITION
+
+  describe("isOperatorForPartition", function () {
+    it("when operator is tokenHolder", async function () {
+      const { token, tokenHolder } = await loadFixture(deployFixture);
+      expect(await token.isOperatorForPartition(partition1, tokenHolder, tokenHolder)).to.be.true;
+    });
+
+    it("when operator is authorized by tokenHolder", async function () {
+      const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+      await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+      expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.true;
+    });
+
+    it("when is a revoked operator", async function () {
+      const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+      await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+      await token.connect(tokenHolder).revokeOperatorByPartition(partition1, operator);
+      expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.false;
+    });
+
+    it("when is a controller and token is controllable", async function () {
+      const { token, tokenHolder, controller } = await loadFixture(deployFixture);
+      expect(await token.isOperatorForPartition(partition1, controller, tokenHolder)).to.be.true;
+    });
+
+    it("when is a controller and token is not controllable", async function () {
+      const { token, owner, tokenHolder, controller } = await loadFixture(deployFixture);
+      await token.connect(owner).renounceControl();
+      expect(await token.isOperatorForPartition(partition1, controller, tokenHolder)).to.be.false;
+    });
+  });
 });
