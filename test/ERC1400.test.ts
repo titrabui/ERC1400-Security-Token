@@ -10,7 +10,6 @@ const ERC20_INTERFACE_NAME = "ERC20Token";
 const ERC1400_INTERFACE_NAME = "ERC1400Token";
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ZERO_BYTE = "0x";
 
 const CERTIFICATE_SIGNER = "0xe31C41f0f70C5ff39f73B4B94bcCD767b3071630";
@@ -47,7 +46,7 @@ function assertTransferEvent(
   _to: Signer,
   _amount: bigint,
   _data: string | null,
-  _operatorData = "0x"
+  _operatorData = ZERO_BYTE
 ) {
   let i = 0;
   let event;
@@ -1024,6 +1023,291 @@ describe("ERC1400", function () {
         await expect(
           token.connect(tokenHolder).transferByPartition(partition1, recipient, issuanceAmount + 1n, ZERO_BYTES32)
         ).to.be.revertedWith("52");
+      });
+    });
+  });
+
+  // OPERATORTRANSFERBYPARTITION
+
+  describe.only("operatorTransferByPartition", function () {
+    describe("when the sender is approved for this partition", function () {
+      describe("when approved amount is sufficient", function () {
+        it("transfers the requested amount", async function () {
+          const transferAmount = 300n;
+
+          const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+          await assertBalanceOf(token, recipient, partition1, 0n);
+          expect(await token.allowanceByPartition(partition1, tokenHolder, operator)).to.equal(0n);
+
+          const approvedAmount = 400n;
+          await token.connect(tokenHolder).approveByPartition(partition1, operator, approvedAmount);
+          expect(await token.allowanceByPartition(partition1, tokenHolder, operator)).to.equal(approvedAmount);
+          await token
+            .connect(operator)
+            .operatorTransferByPartition(partition1, tokenHolder, recipient, transferAmount, ZERO_BYTE, ZERO_BYTES32);
+
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+          await assertBalanceOf(token, recipient, partition1, transferAmount);
+          expect(await token.allowanceByPartition(partition1, tokenHolder, operator)).to.equal(
+            approvedAmount - transferAmount
+          );
+        });
+      });
+
+      describe("when approved amount is not sufficient", function () {
+        it("reverts", async function () {
+          const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+          await assertBalanceOf(token, recipient, partition1, 0n);
+          expect(await token.allowanceByPartition(partition1, tokenHolder, operator)).to.equal(0n);
+
+          const approvedAmount = 200n;
+          await token.connect(tokenHolder).approveByPartition(partition1, operator, approvedAmount);
+          expect(await token.allowanceByPartition(partition1, tokenHolder, operator)).to.equal(approvedAmount);
+          await expect(
+            token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                recipient,
+                approvedAmount + 1n,
+                ZERO_BYTE,
+                ZERO_BYTES32
+              )
+          ).to.be.revertedWith("53");
+        });
+      });
+    });
+
+    describe("when the sender is an operator for this partition", function () {
+      describe("when the sender has enough balance for this partition", function () {
+        describe("when partition does not change", function () {
+          it("transfers the requested amount", async function () {
+            const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+            await assertBalanceOf(token, recipient, partition1, 0n);
+
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            await token
+              .connect(operator)
+              .operatorTransferByPartition(partition1, tokenHolder, recipient, transferAmount, ZERO_BYTE, ZERO_BYTES32);
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+            await assertBalanceOf(token, recipient, partition1, transferAmount);
+          });
+
+          it("transfers the requested amount with attached data (without changePartition flag)", async function () {
+            const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+            await assertBalanceOf(token, recipient, partition1, 0n);
+
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            await token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                recipient,
+                transferAmount,
+                doNotChangePartition,
+                ZERO_BYTES32
+              );
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+            await assertBalanceOf(token, recipient, partition1, transferAmount);
+          });
+
+          it("emits a TransferByPartition event", async function () {
+            const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            const tx = await token
+              .connect(operator)
+              .operatorTransferByPartition(partition1, tokenHolder, recipient, transferAmount, ZERO_BYTE, ZERO_BYTES32);
+            const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+            const logs = receipt?.logs;
+
+            expect(logs?.length).to.equal(2);
+            if (logs && logs?.length > 0) {
+              assertTransferEvent(
+                token,
+                logs,
+                partition1,
+                operator,
+                tokenHolder,
+                recipient,
+                transferAmount,
+                ZERO_BYTE,
+                ZERO_BYTES32
+              );
+            }
+          });
+        });
+
+        describe("when partition changes", function () {
+          it("transfers the requested amount", async function () {
+            const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+            await assertBalanceOf(token, recipient, partition2, 0n);
+
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            await token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                recipient,
+                transferAmount,
+                changeToPartition2,
+                ZERO_BYTES32
+              );
+
+            await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+            await assertBalanceOf(token, recipient, partition2, transferAmount);
+          });
+
+          it("converts the requested amount", async function () {
+            const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+            await assertBalance(token, tokenHolder, issuanceAmount);
+            await assertBalanceOfByPartition(token, tokenHolder, partition1, issuanceAmount);
+            await assertBalanceOfByPartition(token, tokenHolder, partition2, 0n);
+
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            await token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                tokenHolder,
+                transferAmount,
+                changeToPartition2,
+                ZERO_BYTES32
+              );
+
+            await assertBalance(token, tokenHolder, issuanceAmount);
+            await assertBalanceOfByPartition(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+            await assertBalanceOfByPartition(token, tokenHolder, partition2, transferAmount);
+          });
+
+          it("emits a changedPartition event", async function () {
+            const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            const transferAmount = 300n;
+            const tx = await token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                recipient,
+                transferAmount,
+                changeToPartition2,
+                ZERO_BYTES32
+              );
+            const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+            const logs = receipt?.logs;
+
+            expect(logs?.length).to.equal(3);
+            if (logs && logs?.length > 0) {
+              assertTransferEvent(
+                token,
+                [logs[0], logs[1]],
+                partition1,
+                operator,
+                tokenHolder,
+                recipient,
+                transferAmount,
+                changeToPartition2,
+                ZERO_BYTES32
+              );
+
+              const event = token.interface.decodeEventLog("ChangedPartition", logs[2].data, logs[2].topics);
+              expect(event.fromPartition).to.equal(partition1);
+              expect(event.toPartition).to.equal(partition2);
+              expect(event.value).to.equal(transferAmount);
+            }
+          });
+        });
+      });
+
+      describe("when the sender does not have enough balance for this partition", function () {
+        it("reverts", async function () {
+          const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+          await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+          await expect(
+            token
+              .connect(operator)
+              .operatorTransferByPartition(
+                partition1,
+                tokenHolder,
+                recipient,
+                issuanceAmount + 1n,
+                ZERO_BYTE,
+                ZERO_BYTES32
+              )
+          ).to.revertedWith("52");
+        });
+      });
+    });
+
+    describe("when the sender is a global operator", function () {
+      it("redeems the requested amount", async function () {
+        const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+        await assertBalanceOf(token, recipient, partition1, 0n);
+
+        await token.connect(tokenHolder).authorizeOperator(operator, { from: tokenHolder });
+
+        const transferAmount = 300n;
+        await token
+          .connect(operator)
+          .operatorTransferByPartition(partition1, tokenHolder, recipient, transferAmount, ZERO_BYTE, ZERO_BYTES32);
+
+        await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+        await assertBalanceOf(token, recipient, partition1, transferAmount);
+      });
+    });
+
+    describe("when the sender is neither an operator, nor approved", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder, recipient, operator } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        await expect(
+          token
+            .connect(operator)
+            .operatorTransferByPartition(partition1, tokenHolder, recipient, 300n, ZERO_BYTE, ZERO_BYTES32)
+        ).to.be.revertedWith("53");
       });
     });
   });
