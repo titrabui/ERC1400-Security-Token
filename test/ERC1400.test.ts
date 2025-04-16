@@ -1359,4 +1359,34 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // AUTHORIZE OPERATOR BY PARTITION
+
+  describe("authorizeOperatorByPartition", function () {
+    it("authorizes the operator", async function () {
+      const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+      expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.false;
+      const tx = await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+      expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.true;
+      await expect(tx).to.emit(token, "AuthorizedOperatorByPartition").withArgs(partition1, operator, tokenHolder);
+    });
+  });
+
+  // REVOKEOPERATORBYPARTITION
+
+  describe("revokeOperatorByPartition", function () {
+    describe("when operator is not controller", function () {
+      it("revokes the operator", async function () {
+        const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+        await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+        expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.true;
+
+        const tx = await token.connect(tokenHolder).revokeOperatorByPartition(partition1, operator);
+        expect(await token.isOperatorForPartition(partition1, operator, tokenHolder)).to.be.false;
+        await expect(tx).to.emit(token, "RevokedOperatorByPartition").withArgs(partition1, operator, tokenHolder);
+      });
+    });
+  });
 });
