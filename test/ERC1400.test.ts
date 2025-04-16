@@ -40,7 +40,7 @@ const issuanceAmount = 1000n;
 
 function assertTransferEvent(
   _contract: ERC1400,
-  _logs: Log[],
+  _logs: readonly Log[],
   _fromPartition: string,
   _operator: Signer,
   _from: Signer,
@@ -953,6 +953,77 @@ describe("ERC1400", function () {
             .connect(operator)
             .transferFromWithData(tokenHolder, recipient, (issuanceAmount * 25n) / 10n, ZERO_BYTES32)
         ).to.be.revertedWith("53");
+      });
+    });
+  });
+
+  // TRANSFERBYPARTITION
+
+  describe("transferByPartition", function () {
+    describe("when the sender has enough balance for this partition", function () {
+      describe("when the transfer amount is not equal to 0", function () {
+        it("transfers the requested amount", async function () {
+          const transferAmount = 300n;
+
+          const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+          await assertBalanceOf(token, recipient, partition1, 0n);
+
+          await token.connect(tokenHolder).transferByPartition(partition1, recipient, transferAmount, ZERO_BYTES32);
+          await token.connect(tokenHolder).transferByPartition(partition1, recipient, 0, ZERO_BYTES32);
+
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - transferAmount);
+          await assertBalanceOf(token, recipient, partition1, transferAmount);
+        });
+
+        it("emits a TransferByPartition event", async function () {
+          const transferAmount = 300n;
+
+          const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+          const tx = await token
+            .connect(tokenHolder)
+            .transferByPartition(partition1, recipient, transferAmount, ZERO_BYTES32);
+          const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+          const logs = receipt?.logs;
+          expect(logs?.length).to.equal(2);
+
+          if (logs && logs?.length > 0) {
+            assertTransferEvent(
+              token,
+              logs,
+              partition1,
+              tokenHolder,
+              tokenHolder,
+              recipient,
+              transferAmount,
+              ZERO_BYTES32
+            );
+          }
+        });
+      });
+
+      describe("when the transfer amount is equal to 0", function () {
+        it("reverts", async function () {
+          const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+          await expect(
+            token.connect(tokenHolder).transferByPartition(partition2, recipient, 0, ZERO_BYTES32)
+          ).to.be.revertedWith("50");
+        });
+      });
+    });
+
+    describe("when the sender does not have enough balance for this partition", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder, recipient } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        await expect(
+          token.connect(tokenHolder).transferByPartition(partition1, recipient, issuanceAmount + 1n, ZERO_BYTES32)
+        ).to.be.revertedWith("52");
       });
     });
   });
