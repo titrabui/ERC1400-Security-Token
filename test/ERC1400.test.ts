@@ -1334,4 +1334,29 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // REVOKEOPERATOR
+
+  describe("revokeOperator", function () {
+    describe("when sender revokes an operator", function () {
+      it("revokes the operator (when operator is not the controller)", async function () {
+        const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+        expect(await token.isOperator(operator, tokenHolder)).to.be.false;
+        await token.connect(tokenHolder).authorizeOperator(operator);
+        expect(await token.isOperator(operator, tokenHolder)).to.be.true;
+
+        const tx = await token.connect(tokenHolder).revokeOperator(operator);
+        expect(await token.isOperator(operator, tokenHolder)).to.be.false;
+        await expect(tx).to.emit(token, "RevokedOperator").withArgs(operator, tokenHolder);
+      });
+    });
+
+    describe("when sender revokes himself", function () {
+      it("reverts", async function () {
+        const { token, tokenHolder } = await loadFixture(deployFixture);
+        await expect(token.connect(tokenHolder).revokeOperator(tokenHolder)).to.be.revertedWithoutReason();
+      });
+    });
+  });
 });
