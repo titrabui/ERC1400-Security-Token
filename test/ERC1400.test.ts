@@ -1029,7 +1029,7 @@ describe("ERC1400", function () {
 
   // OPERATORTRANSFERBYPARTITION
 
-  describe.only("operatorTransferByPartition", function () {
+  describe("operatorTransferByPartition", function () {
     describe("when the sender is approved for this partition", function () {
       describe("when approved amount is sufficient", function () {
         it("transfers the requested amount", async function () {
@@ -1308,6 +1308,29 @@ describe("ERC1400", function () {
             .connect(operator)
             .operatorTransferByPartition(partition1, tokenHolder, recipient, 300n, ZERO_BYTE, ZERO_BYTES32)
         ).to.be.revertedWith("53");
+      });
+    });
+  });
+
+  // AUTHORIZEOPERATOR
+
+  describe("authorizeOperator", function () {
+    describe("when sender authorizes an operator", function () {
+      it("authorizes the operator", async function () {
+        const { token, tokenHolder, operator } = await loadFixture(deployFixture);
+
+        expect(await token.isOperator(operator, tokenHolder)).to.be.false;
+        const tx = await token.connect(tokenHolder).authorizeOperator(operator);
+
+        expect(await token.isOperator(operator, tokenHolder)).to.be.true;
+        await expect(tx).to.emit(token, "AuthorizedOperator").withArgs(operator, tokenHolder);
+      });
+    });
+
+    describe("when sender authorizes himself", function () {
+      it("reverts", async function () {
+        const { token, tokenHolder } = await loadFixture(deployFixture);
+        await expect(token.connect(tokenHolder).authorizeOperator(tokenHolder)).to.be.revertedWithoutReason();
       });
     });
   });
