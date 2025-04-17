@@ -1457,4 +1457,102 @@ describe("ERC1400", function () {
       expect(await token.isOperatorForPartition(partition1, controller, tokenHolder)).to.be.false;
     });
   });
+
+  // ISSUE
+
+  describe("issue", function () {
+    describe("when sender is the issuer", function () {
+      describe("when token is issuable", function () {
+        describe("when default partitions have been defined", function () {
+          describe("when the amount is a multiple of the granularity", function () {
+            describe("when the recipient is not the zero address", function () {
+              it("issues the requested amount", async function () {
+                const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+                await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+                await assertTotalSupply(token, issuanceAmount);
+                await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount);
+              });
+
+              it("issues twice the requested amount", async function () {
+                const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+                await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+                await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+                await assertTotalSupply(token, 2n * issuanceAmount);
+                await assertBalanceOf(token, tokenHolder, partition1, 2n * issuanceAmount);
+              });
+
+              it("emits a issuedByPartition event", async function () {
+                const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+                const tx = await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+                await expect(tx).to.emit(token, "Issued").withArgs(owner, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+                await expect(tx).to.emit(token, "Transfer").withArgs(ethers.ZeroAddress, tokenHolder, issuanceAmount);
+
+                await expect(tx)
+                  .to.emit(token, "IssuedByPartition")
+                  .withArgs(partition1, owner, tokenHolder, issuanceAmount, ZERO_BYTES32, ZERO_BYTE);
+              });
+            });
+
+            describe("when the recipient is not the zero address", function () {
+              it("issues the requested amount", async function () {
+                const { token, owner } = await loadFixture(deployFixture);
+                await expect(
+                  token.connect(owner).issue(ethers.ZeroAddress, issuanceAmount, ZERO_BYTES32)
+                ).to.be.revertedWith("57");
+              });
+            });
+          });
+
+          describe("when the amount is not a multiple of the granularity", function () {
+            it("issues the requested amount", async function () {
+              const { owner, tokenHolder, controller } = await loadFixture(deployFixture);
+              const token = await ethers.deployContract("ERC1400", [
+                "ERC1400Token",
+                "DAU",
+                2,
+                [controller],
+                partitions,
+              ]);
+              await expect(token.connect(owner).issue(tokenHolder, 1, ZERO_BYTES32)).to.be.revertedWith("50");
+            });
+          });
+        });
+
+        describe("when default partitions have not been defined", function () {
+          it("reverts", async function () {
+            const { owner, tokenHolder, controller } = await loadFixture(deployFixture);
+            const token = await ethers.deployContract("ERC1400", ["ERC1400Token", "DAU", 1, [controller], []]);
+            await expect(token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32)).to.be.revertedWith(
+              "55"
+            );
+          });
+        });
+      });
+
+      describe("when token is not issuable", function () {
+        it("reverts", async function () {
+          const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+          expect(await token.isIssuable()).to.be.true;
+          await token.connect(owner).renounceIssuance();
+          expect(await token.isIssuable()).to.be.false;
+          await expect(token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32)).to.be.revertedWith("55");
+        });
+      });
+    });
+
+    describe("when sender is not the issuer", function () {
+      it("reverts", async function () {
+        const { token, unknown, tokenHolder } = await loadFixture(deployFixture);
+        await expect(
+          token.connect(unknown).issue(tokenHolder, issuanceAmount, ZERO_BYTES32)
+        ).to.be.revertedWithoutReason();
+      });
+    });
+  });
 });
