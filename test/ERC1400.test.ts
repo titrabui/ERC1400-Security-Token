@@ -2034,4 +2034,85 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // OPERATOREDEEMBYPARTITION
+
+  describe.only("operatorRedeemByPartition", function () {
+    describe("when the sender is an operator for this partition", function () {
+      describe("when the redeemer has enough balance for this partition", function () {
+        it("redeems the requested amount", async function () {
+          const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+          await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+          const redeemAmount = 300n;
+          await token.connect(operator).operatorRedeemByPartition(partition1, tokenHolder, redeemAmount, ZERO_BYTES32);
+
+          await assertTotalSupply(token, issuanceAmount - redeemAmount);
+          await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - redeemAmount);
+        });
+
+        it("emits a redeemedByPartition event", async function () {
+          const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+          await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+          await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+          const redeemAmount = 300n;
+          const tx = await token
+            .connect(operator)
+            .operatorRedeemByPartition(partition1, tokenHolder, redeemAmount, ZERO_BYTES32);
+
+          const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+          const logs = receipt?.logs;
+          expect(logs?.length).to.equal(3);
+
+          if (logs?.length === 3) {
+            assertBurnEvent(token, logs, partition1, operator, tokenHolder, redeemAmount, ZERO_BYTE, ZERO_BYTES32);
+          }
+        });
+      });
+
+      describe("when the redeemer does not have enough balance for this partition", function () {
+        it("reverts", async function () {
+          it("redeems the requested amount", async function () {
+            const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+            await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+            await token.connect(tokenHolder).authorizeOperatorByPartition(partition1, operator);
+
+            await expect(
+              token
+                .connect(operator)
+                .operatorRedeemByPartition(partition1, tokenHolder, issuanceAmount + 1n, ZERO_BYTES32)
+            ).to.be.revertedWith("52");
+          });
+        });
+      });
+    });
+
+    describe("when the sender is a global operator", function () {
+      it("redeems the requested amount", async function () {
+        const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        await token.connect(tokenHolder).authorizeOperator(operator);
+
+        const redeemAmount = 300n;
+        await token.connect(operator).operatorRedeemByPartition(partition1, tokenHolder, redeemAmount, ZERO_BYTES32);
+
+        await assertTotalSupply(token, issuanceAmount - redeemAmount);
+        await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - redeemAmount);
+      });
+    });
+
+    describe("when the sender is not an operator", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        await expect(
+          token.connect(operator).operatorRedeemByPartition(partition1, tokenHolder, 1, ZERO_BYTES32)
+        ).to.be.revertedWith("58");
+      });
+    });
+  });
 });
