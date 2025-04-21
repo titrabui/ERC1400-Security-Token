@@ -1768,4 +1768,213 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // REDEEMFROM
+
+  describe("redeemFrom", function () {
+    describe("when the operator is approved", function () {
+      describe("when defaultPartitions have been defined", function () {
+        describe("when the sender has enough balance for those default partitions", function () {
+          describe("when the amount is a multiple of the granularity", function () {
+            describe("when the redeemer is not the zero address", function () {
+              it("redeems the requested amount", async function () {
+                const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+                await token.connect(operator).redeemFrom(tokenHolder, (25n * issuanceAmount) / 10n, ZERO_BYTES32);
+
+                await assertBalances(token, tokenHolder, partitions, [0n, issuanceAmount / 2n, 0n]);
+              });
+
+              it("emits redeemedByPartition events", async function () {
+                const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                const tx = await token
+                  .connect(operator)
+                  .redeemFrom(tokenHolder, (25n * issuanceAmount) / 10n, ZERO_BYTES32);
+
+                const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+                const logs = receipt?.logs;
+                expect(logs?.length).to.equal(3 * partitions.length);
+
+                if (logs?.length === 3 * partitions.length) {
+                  assertBurnEvent(
+                    token,
+                    [logs[0], logs[1], logs[2]],
+                    partition3,
+                    operator,
+                    tokenHolder,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertBurnEvent(
+                    token,
+                    [logs[3], logs[4], logs[5]],
+                    partition1,
+                    operator,
+                    tokenHolder,
+                    issuanceAmount,
+                    ZERO_BYTES32
+                  );
+                  assertBurnEvent(
+                    token,
+                    [logs[6], logs[7], logs[8]],
+                    partition2,
+                    operator,
+                    tokenHolder,
+                    issuanceAmount / 2n,
+                    ZERO_BYTES32
+                  );
+                }
+              });
+            });
+
+            describe("when the redeemer is the zero address", function () {
+              it("reverts", async function () {
+                const { token, owner, tokenHolder, operator, controller } = await loadFixture(deployFixture);
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(tokenHolder).authorizeOperator(operator);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+
+                await expect(
+                  token.connect(controller).redeemFrom(ethers.ZeroAddress, (25n * issuanceAmount) / 10n, ZERO_BYTES32)
+                ).to.be.revertedWith("50");
+              });
+
+              it("reverts (mock contract - for 100% test coverage)", async function () {
+                const { owner, tokenHolder, controller } = await loadFixture(deployFixture);
+                const token = await ethers.deployContract(
+                  "FakeERC1400Mock",
+                  ["ERC1400Token", "DAU", 1, [controller], partitions, ethers.ZeroAddress, ethers.ZeroAddress],
+                  owner
+                );
+
+                await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                  issuanceAmount,
+                  issuanceAmount,
+                  issuanceAmount,
+                ]);
+                await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+                await expect(
+                  token.connect(controller).redeemFrom(ethers.ZeroAddress, (25n * issuanceAmount) / 10n, ZERO_BYTES32)
+                ).to.be.revertedWith("56");
+              });
+            });
+          });
+
+          describe("when the amount is not a multiple of the granularity", function () {
+            it("reverts", async function () {
+              const { owner, tokenHolder, controller, operator } = await loadFixture(deployFixture);
+              const token = await ethers.deployContract("ERC1400", [
+                "ERC1400Token",
+                "DAU",
+                2,
+                [controller],
+                partitions,
+              ]);
+              await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+                issuanceAmount,
+                issuanceAmount,
+                issuanceAmount,
+              ]);
+              await token.connect(tokenHolder).authorizeOperator(operator);
+              await token.connect(owner).setDefaultPartitions(reversedPartitions);
+              await assertBalances(token, tokenHolder, partitions, [issuanceAmount, issuanceAmount, issuanceAmount]);
+              await expect(token.connect(operator).redeemFrom(tokenHolder, 3, ZERO_BYTES32)).to.be.revertedWith("50");
+            });
+          });
+        });
+
+        describe("when the sender does not have enough balance for those default partitions", function () {
+          it("reverts", async function () {
+            const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+            await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+              issuanceAmount,
+              issuanceAmount,
+              issuanceAmount,
+            ]);
+            await token.connect(tokenHolder).authorizeOperator(operator);
+            await token.connect(owner).setDefaultPartitions(reversedPartitions);
+            await expect(
+              token.connect(operator).redeemFrom(tokenHolder, 3n * issuanceAmount + 1n, ZERO_BYTES32)
+            ).to.be.revertedWith("52");
+          });
+
+          it("reverts (mock contract - for 100% test coverage)", async function () {
+            const { owner, tokenHolder, controller } = await loadFixture(deployFixture);
+            const token = await ethers.deployContract(
+              "FakeERC1400Mock",
+              ["ERC1400Token", "DAU", 1, [controller], partitions, ethers.ZeroAddress, ethers.ZeroAddress],
+              owner
+            );
+
+            await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+              issuanceAmount,
+              issuanceAmount,
+              issuanceAmount,
+            ]);
+            await token.connect(owner).setDefaultPartitions(reversedPartitions);
+
+            await expect(
+              token.connect(controller).redeemFrom(tokenHolder, 3n * issuanceAmount + 1n, ZERO_BYTES32)
+            ).to.be.revertedWith("52");
+          });
+        });
+      });
+
+      describe("when defaultPartitions have not been defined", function () {
+        it("reverts", async function () {
+          const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+          await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+            issuanceAmount,
+            issuanceAmount,
+            issuanceAmount,
+          ]);
+          await token.connect(tokenHolder).authorizeOperator(operator);
+          await token.connect(owner).setDefaultPartitions([]);
+
+          await expect(
+            token.connect(operator).redeemFrom(tokenHolder, (25n * issuanceAmount) / 10n, ZERO_BYTES32)
+          ).to.be.revertedWith("55");
+        });
+      });
+    });
+
+    describe("when the operator is not approved", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder, operator } = await loadFixture(deployFixture);
+        await issueOnMultiplePartitions(token, owner, tokenHolder, partitions, [
+          issuanceAmount,
+          issuanceAmount,
+          issuanceAmount,
+        ]);
+        await token.connect(owner).setDefaultPartitions(reversedPartitions);
+        await expect(
+          token.connect(operator).redeemFrom(tokenHolder, (25n * issuanceAmount) / 10n, ZERO_BYTES32)
+        ).to.be.revertedWith("53");
+      });
+    });
+  });
 });
