@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { BaseContract, ContractTransactionResponse, Log, Signer } from "ethers";
+import { BaseContract, ContractTransactionResponse, Log, Signer, solidityPackedKeccak256 } from "ethers";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { ERC1400 } from "../typechain-types";
 
@@ -2037,7 +2037,7 @@ describe("ERC1400", function () {
 
   // OPERATOREDEEMBYPARTITION
 
-  describe.only("operatorRedeemByPartition", function () {
+  describe("operatorRedeemByPartition", function () {
     describe("when the sender is an operator for this partition", function () {
       describe("when the redeemer has enough balance for this partition", function () {
         it("redeems the requested amount", async function () {
@@ -2112,6 +2112,171 @@ describe("ERC1400", function () {
         await expect(
           token.connect(operator).operatorRedeemByPartition(partition1, tokenHolder, 1, ZERO_BYTES32)
         ).to.be.revertedWith("58");
+      });
+    });
+  });
+
+  // BASIC FUNCTIONNALITIES
+
+  describe("parameters", function () {
+    describe("name", function () {
+      it("returns the name of the token", async function () {
+        const { token } = await loadFixture(deployFixture);
+        const name = await token.name();
+
+        expect(name).equal("ERC1400Token");
+      });
+    });
+
+    describe("symbol", function () {
+      it("returns the symbol of the token", async function () {
+        const { token } = await loadFixture(deployFixture);
+        const symbol = await token.symbol();
+
+        expect(symbol).equal("DAU");
+      });
+    });
+
+    describe("decimals", function () {
+      it("returns the decimals the token", async function () {
+        const { token } = await loadFixture(deployFixture);
+        const decimals = await token.decimals();
+
+        expect(decimals).equal(18);
+      });
+    });
+
+    describe("granularity", function () {
+      it("returns the granularity of tokens", async function () {
+        const { token } = await loadFixture(deployFixture);
+        const granularity = await token.granularity();
+
+        expect(granularity).equal(1);
+      });
+    });
+
+    describe("totalPartitions", function () {
+      it("returns the list of partitions", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+        let totalPartitions = await token.totalPartitions();
+        expect(totalPartitions.length).equal(0);
+
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalPartitions = await token.totalPartitions();
+        expect(totalPartitions.length).equal(1);
+        expect(totalPartitions[0]).equal(partition1);
+
+        await token.connect(owner).issueByPartition(partition2, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalPartitions = await token.totalPartitions();
+        expect(totalPartitions.length).equal(2);
+        expect(totalPartitions[0]).equal(partition1);
+        expect(totalPartitions[1]).equal(partition2);
+
+        await token.connect(owner).issueByPartition(partition3, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalPartitions = await token.totalPartitions();
+        expect(totalPartitions.length).equal(3);
+        expect(totalPartitions[0]).equal(partition1);
+        expect(totalPartitions[1]).equal(partition2);
+        expect(totalPartitions[2]).equal(partition3);
+      });
+    });
+
+    describe("totalSupplyByPartition", function () {
+      it("returns the totalSupply of a given partition", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+        let totalSupplyPartition1 = await token.totalSupplyByPartition(partition1);
+        let totalSupplyPartition2 = await token.totalSupplyByPartition(partition2);
+        expect(totalSupplyPartition1).equal(0);
+        expect(totalSupplyPartition2).equal(0);
+
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalSupplyPartition1 = await token.totalSupplyByPartition(partition1);
+        totalSupplyPartition2 = await token.totalSupplyByPartition(partition2);
+        expect(totalSupplyPartition1).equal(issuanceAmount);
+        expect(totalSupplyPartition2).equal(0);
+
+        await token.connect(owner).issueByPartition(partition2, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalSupplyPartition1 = await token.totalSupplyByPartition(partition1);
+        totalSupplyPartition2 = await token.totalSupplyByPartition(partition2);
+        expect(totalSupplyPartition1).equal(issuanceAmount);
+        expect(totalSupplyPartition2).equal(issuanceAmount);
+
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+        totalSupplyPartition1 = await token.totalSupplyByPartition(partition1);
+        totalSupplyPartition2 = await token.totalSupplyByPartition(partition2);
+        expect(totalSupplyPartition1).equal(2n * issuanceAmount);
+        expect(totalSupplyPartition2).equal(issuanceAmount);
+      });
+    });
+
+    describe("total supply", function () {
+      it("returns the total amount of tokens", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+        await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+        const totalSupply = await token.totalSupply();
+
+        expect(totalSupply).equal(issuanceAmount);
+      });
+    });
+
+    describe("balanceOf", function () {
+      describe("when the requested account has no tokens", function () {
+        it("returns zero", async function () {
+          const { token, unknown } = await loadFixture(deployFixture);
+
+          const balance = await token.balanceOf(unknown);
+
+          expect(balance).equal(0);
+        });
+      });
+
+      describe("when the requested account has some tokens", function () {
+        it("returns the total amount of tokens", async function () {
+          const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+
+          await token.connect(owner).issue(tokenHolder, issuanceAmount, ZERO_BYTES32);
+          const balance = await token.balanceOf(tokenHolder);
+
+          expect(balance).equal(issuanceAmount);
+        });
+      });
+    });
+
+    describe("controllers", function () {
+      it("returns the list of controllers", async function () {
+        const { token, controller } = await loadFixture(deployFixture);
+
+        const controllers = await token.controllers();
+
+        expect(controllers.length).equal(1);
+        expect(controllers[0]).equal(controller);
+      });
+    });
+
+    describe("implementer1400", function () {
+      it("returns the contract address", async function () {
+        const { token, registry } = await loadFixture(deployFixture);
+
+        const interface1400Implementer = await registry.getInterfaceImplementer(
+          token.target,
+          ethers.solidityPackedKeccak256(["string"], [ERC1400_INTERFACE_NAME])
+        );
+        expect(interface1400Implementer).equal(token.target);
+      });
+    });
+
+    describe("implementer20", function () {
+      it("returns the zero address", async function () {
+        const { token, registry } = await loadFixture(deployFixture);
+
+        const interface20Implementer = await registry.getInterfaceImplementer(
+          token.target,
+          ethers.solidityPackedKeccak256(["string"], [ERC1400_INTERFACE_NAME])
+        );
+        expect(interface20Implementer).equal(token.target);
       });
     });
   });
