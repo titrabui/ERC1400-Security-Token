@@ -1977,4 +1977,61 @@ describe("ERC1400", function () {
       });
     });
   });
+
+  // REDEEMBYPARTITION
+
+  describe("redeemByPartition", function () {
+    describe("when the redeemer has enough balance for this partition", function () {
+      it("redeems the requested amount", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        const redeemAmount = 300n;
+        await token.connect(tokenHolder).redeemByPartition(partition1, redeemAmount, ZERO_BYTES32);
+
+        await assertTotalSupply(token, issuanceAmount - redeemAmount);
+        await assertBalanceOf(token, tokenHolder, partition1, issuanceAmount - redeemAmount);
+      });
+
+      it("emits a redeemedByPartition event", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        const redeemAmount = 300n;
+        const tx = await token.connect(tokenHolder).redeemByPartition(partition1, redeemAmount, ZERO_BYTES32);
+
+        const receipt = await ethers.provider.getTransactionReceipt(tx.hash);
+        const logs = receipt?.logs;
+        expect(logs?.length).to.equal(3);
+
+        if (logs?.length === 3) {
+          assertBurnEvent(token, logs, partition1, tokenHolder, tokenHolder, redeemAmount, ZERO_BYTES32);
+        }
+      });
+    });
+
+    describe("when the redeemer does not have enough balance for this partition", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, tokenHolder, issuanceAmount, ZERO_BYTES32);
+
+        await expect(
+          token.connect(tokenHolder).redeemByPartition(partition1, issuanceAmount + 1n, ZERO_BYTES32)
+        ).to.be.revertedWith("52");
+        await expect(token.connect(tokenHolder).redeemByPartition(partition2, 1, ZERO_BYTES32)).to.be.revertedWith(
+          "52"
+        );
+      });
+    });
+
+    describe("special case (_removeTokenFromPartition shall revert)", function () {
+      it("reverts", async function () {
+        const { token, owner, tokenHolder } = await loadFixture(deployFixture);
+        await token.connect(owner).issueByPartition(partition1, owner, issuanceAmount, ZERO_BYTES32);
+        await expect(token.connect(tokenHolder).redeemByPartition(partition1, 0, ZERO_BYTES32)).to.be.revertedWith(
+          "50"
+        );
+      });
+    });
+  });
 });
